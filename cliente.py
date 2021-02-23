@@ -48,6 +48,7 @@ class SlidingWindow(object):
             timeout = self._calculate_timeout(oldest_endtime)
 
             if timeout == 0:
+                print("timeout antes do recv")
                 if retrans_left <= 0:
                     print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
                     return "timeout"
@@ -68,11 +69,12 @@ class SlidingWindow(object):
                     print(self.window)
                     # se o ack chegou para outro numero de sequencia diferente do mais antigo
                     # e o timeout do mais antigo foi atingido, reenvia
-                    # if ack[1] != oldest_seq_number and self._calculate_timeout(oldest_endtime) == 0:
-                    #     if retrans_left <= 0:
-                    #         print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
-                    #         return "timeout"
-                    #     self.repeat(data, oldest_seq_number, retrans_left)
+                    if ack[1] != oldest_seq_number and self._calculate_timeout(oldest_endtime) == 0:
+                        print("entrou nesse aqui")
+                        if retrans_left <= 0:
+                            print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
+                            return "timeout"
+                        self.repeat(data, oldest_seq_number, retrans_left)
 
             except socket.timeout:
                 # manda de novo
@@ -167,7 +169,7 @@ def main():
             ok = struct.unpack('H', data)[0]
             if ok == 4:
                 print("udp_port: ", connection[1])
-                msg = SlidingWindow(3, 3, 1, connection[1], ip, s).run(fname)
+                msg = SlidingWindow(4, 3, 4, connection[1], ip, s).run(fname)
                 if msg == "ok":
                     s.settimeout(None)
                     fim = s.recv(2)

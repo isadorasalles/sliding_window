@@ -65,14 +65,14 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
                 ack = b''
                 ack += struct.pack('H', 7)
                 ack += struct.pack('I', file_data[1])
-                if file_data[1] != 1:
-                    try:
-                        sock_tcp.send(ack)
-                    except:
-                        print("Cliente desconectou, arquivo nao foi recebido por completo")
-                        return -1
-                else: 
-                    count -= payload_size
+                # if file_data[1] != 1:
+                try:
+                    sock_tcp.send(ack)
+                except:
+                    print("Cliente desconectou, arquivo nao foi recebido por completo")
+                    return -1
+                # else: 
+                #     count -= payload_size
  
     file_ = os.path.join("output/", fname)
     os.makedirs("output/", exist_ok=True)
