@@ -12,16 +12,18 @@ class SlidingWindow(object):
         self.timeout = timeout
         self.length = 1000
         self.sock_tcp = tcp
-        # self.sock_tcp.settimeout(timeout)
+        # criacao do socket UDP
         self.sock_udp = create_socket(ip, socket.SOCK_DGRAM)
         self.ip = ip
         self.udp_port = udp_port
     
-    def window_initialize(self, data):
+    def window_send(self, data, key):
         # envia um numero de mensagens seguidas igual ou inferior ao tamanho maximo da janela
-        for i in range(self.size):
-            if i < len(data):
-                self.send(data[i], i, self.max_retr)
+        for i in range(self.size - self.size_window):
+            if i+key < len(data):
+                self.send(data[i+key], i+key, self.max_retr)
+                print("Pacote {} enviado".format(i+key))
+                self.last += 1
 
     def send(self, data, key, retrans_left):
         # envia pedaco do arquivo via UDP
@@ -40,55 +42,66 @@ class SlidingWindow(object):
         data = self.send_data(fname)
         self.window = {}
         self.size_window = 0
-        self.window_initialize(data)
-        self.last = self.size-1
-        print(self.window)
+        self.last = 0
+        self.first = 0
+        self.window_send(data, 0)
         while self.window:
             oldest_seq_number, (oldest_endtime, retrans_left) = next(iter(self.window.items()))
+            # print("oldest seq number: ", oldest_seq_number)
             timeout = self._calculate_timeout(oldest_endtime)
 
             if timeout == 0:
-                print("timeout antes do recv")
                 if retrans_left <= 0:
-                    print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
-                    return "timeout"
+                    print("\nTimeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
+                    return -1
                 self.repeat(data, oldest_seq_number, retrans_left)
                 continue
             
             self.sock_tcp.settimeout(timeout)
             try:
                 reply = self.sock_tcp.recv(6)
+                if not reply:
+                    print("Servidor fechou")
+                    return -1
+                    
                 ack = struct.unpack('=HI', reply)
                 print("ACK recebido para o pacote {}".format(ack[1]))
                 if ack[0] == 7 and ack[1] in self.window.keys() and self.size_window <= 4:
                     self.window.pop(ack[1])
-                    self.size_window -= 1
-                    self.last += 1
-                    if self.last < len(data):
-                        self.send(data[self.last], self.last, self.max_retr)   
-                    print(self.window)
-                    # se o ack chegou para outro numero de sequencia diferente do mais antigo
-                    # e o timeout do mais antigo foi atingido, reenvia
-                    if ack[1] != oldest_seq_number and self._calculate_timeout(oldest_endtime) == 0:
-                        print("entrou nesse aqui")
-                        if retrans_left <= 0:
-                            print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
-                            return "timeout"
-                        self.repeat(data, oldest_seq_number, retrans_left)
+                    print(self.size_window)
+                    # se o ACK recebido se refere ao inicio da janela, podemos move-la
+                    if ack[1] == self.first:
+                        print("first: ", self.first)
+                        print(self.window.keys())
+                        print("size_window: ", self.size_window)
+
+                        for i in range(self.size):
+                            if i+self.first in self.window.keys():
+                                break
+                            else:
+                                self.size_window -= 1
+                        self.first += self.size - self.size_window
+                        print("size_window: ", self.size_window)
+                        print("first: ", self.first)
+                        if self.last < len(data):
+                            self.window_send(data, self.last)
+                            # self.send(data[self.last], self.last, self.max_retr) 
+                            print("last: ", self.last)
 
             except socket.timeout:
                 # manda de novo
                 if retrans_left <= 0:
-                    print("Timeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
-                    return "timeout"
+                    print("\nTimeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
+                    return -1
                 self.repeat(data, oldest_seq_number, retrans_left)
         
-        return "ok"
+        return 1
 
     def _calculate_timeout(self, end_time):
         return max(0, min(self.timeout, end_time - time.time()))
 
     def send_data(self, fname):
+        # ler o arquivo em bytes
         with open(fname, "rb") as f:
             data = f.read()
         data_type = 6
@@ -100,6 +113,7 @@ class SlidingWindow(object):
             chunks.append((last_offset, last_size))
         chunks = [(int(offset/self.length), data[offset: offset + size])
                     for offset, size in chunks]
+        # cria uma lista com todos os pacotes a serem enviados, incluindo todo o cabecalho
         packets = [(data_type, num_seq, len(data), data) for num_seq, data in chunks]
         
         return packets
@@ -113,17 +127,16 @@ class SlidingWindow(object):
         return message
 
 def infoFile_msg(csock, fname):
+    # envia mensagem com as informacoes do arquivo a ser enviado
     with open(fname, "rb") as f:
         data = f.read()
-    infoFile_type = 3
-    length = len(data) # tamanho do arquivo em bytes
-    message = b''
-    message += struct.pack('H', infoFile_type)
+    message = struct.pack('H', 3)
     message += str.encode(fname)
-    message += struct.pack('Q', length)
+    message += struct.pack('Q', len(data))
     csock.sendall(message)
 
 def verify_fname(fname):
+    # verifica se o nome do arquivo eh valido
     if '.' not in fname:
         return False
     elif len(fname) > 15:
@@ -136,10 +149,8 @@ def verify_fname(fname):
         return False
     return True
 
-# selective reapt: retransmissao apenas dos que nao recebeu ack
-# go-back-N: todos os frames sao retransmitidos se nao receber ACK do primeiro
-
 def create_socket(ip, type_):
+    # cria socket de acordo com a versao do IP: IPv4 ou IPv6
     ip_type = ipaddress.ip_address(ip)
     if ip_type.version == 6:
         return socket.socket(socket.AF_INET6, type_)
@@ -149,37 +160,61 @@ def main():
     ip = sys.argv[1]
     port = sys.argv[2]
     fname = sys.argv[3]
-    if verify_fname(fname) == False:
-        print("Nome nao permitido")
-    else:
-        # conexao
+
+    if verify_fname(fname) == True:
+        # criando socket e iniciando conexao
         s = create_socket(ip, socket.SOCK_STREAM)
         s.connect((ip, int(port)))
-        hello = 1
-        msg = struct.pack('H', hello)
-        print('Enviado', msg)
-        s.sendall(msg)
-        data = s.recv(1024)
-        connection = struct.unpack('=HI', data)
-        if connection[0] == 2:
-            print('Received', struct.unpack('=HI', data))
+
+        print('Enviando mensagem inicial')
+        hello = struct.pack('H', 1)
+        s.sendall(hello)
+
+        # recebe mensagem contendo a porta UDP para envio do arquivo
+        conn = s.recv(6)
+        if not conn:
+            print("Servidor fechou")
+            s.close()
+            return
+
+        conn = struct.unpack('=HI', conn)
+        if conn[0] == 2:
+            udp_port = conn[1]
+            print('Porta UDP recebida:', udp_port)
+
+            print('Enviando informacoes do arquivo')
             infoFile_msg(s, fname)
-            data = s.recv(1024)
-            print('Received', struct.unpack('H', data))
-            ok = struct.unpack('H', data)[0]
+
+            # recebe mensagem informando que esta tudo pronto para comecar o envio do arquivo
+            ok = s.recv(2)
+            if not ok:
+                print("Servidor fechou")
+                s.close()
+                return
+
+            print('Esta tudo pronto para iniciar o envio do arquivo!\n')
+            ok = struct.unpack('H', ok)[0]
+
             if ok == 4:
-                print("udp_port: ", connection[1])
-                msg = SlidingWindow(4, 3, 4, connection[1], ip, s).run(fname)
-                if msg == "ok":
+                # controle da janela deslizante do transmissor
+                msg = SlidingWindow(4, 4, 1, udp_port, ip, s).run(fname)
+
+                # se deu tudo certo na janela
+                if msg == 1:
                     s.settimeout(None)
-                    fim = s.recv(2)
-                    fim = struct.unpack('H', fim)
-                    if fim[0] == 5:
-                        print("Arquivo enviado corretamente!")
+                    # recebe mensagem indicando que o servidor ja recebeu o arquivo completo
+                    end = s.recv(2)
+                    if not end:
+                        print("Servidor fechou")
                         s.close()
-                        
-                else:
-                    s.close()
+                        return
+
+                    end = struct.unpack('H', end)
+                    if end[0] == 5:
+                        print("\nArquivo enviado corretamente!")
+        s.close()
+    else:
+        print("Nome nao permitido")
 
 if __name__ == "__main__":
     main()

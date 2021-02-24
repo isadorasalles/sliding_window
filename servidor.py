@@ -29,9 +29,9 @@ def receive(sock_tcp):
 def sliding_window(sock_udp, sock_tcp, fname, length):
     # cria estrutura de dados da janela deslizante
     if length % MAX_SIZE == 0:
-        output = [str("") for _ in range(int(length/MAX_SIZE))]
+        output = [b'' for _ in range(int(length/MAX_SIZE))]
     else: 
-        output = [str("") for _ in range(int(length/MAX_SIZE)+1)]
+        output = [b'' for _ in range(int(length/MAX_SIZE)+1)]
 
     count = 0
     sock_udp.settimeout(5)
@@ -54,33 +54,29 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
 
         payload_size = len(data) - 8
         if payload_size == MAX_SIZE or payload_size == length%MAX_SIZE:
-            count += payload_size
+            
             file_data = struct.unpack('=HIH'+str(payload_size)+'s', data)
-
+    
             if file_data[0] == 6:
+                if not output[file_data[1]]:
+                    count += payload_size
                 # armazena o pacote recebido na lista na posicao referente 
                 # ao numero de sequencia do pacote recebido
-                output[file_data[1]] = file_data[3].decode()
+                output[file_data[1]] = file_data[3]
                 # envio da mensagem de confirmacao via TCP
-                ack = b''
-                ack += struct.pack('H', 7)
+                ack = struct.pack('H', 7)
                 ack += struct.pack('I', file_data[1])
-                # if file_data[1] != 1:
                 try:
-                    sock_tcp.send(ack)
+                    sock_tcp.sendall(ack)
                 except:
                     print("Cliente desconectou, arquivo nao foi recebido por completo")
                     return -1
-                # else: 
-                #     count -= payload_size
- 
+    
     file_ = os.path.join("output/", fname)
-    os.makedirs("output/", exist_ok=True)
-    with open(file_, "w") as out:
+    with open(file_, "wb") as out:
         for chunks in output:
             out.write(chunks)
-
-    print(output)
+    print("Arquivo recebido com sucesso!")
 
     return 1
 
@@ -99,7 +95,7 @@ def client_thread(sock_tcp, ip_type):
         sock_udp, udp_port = udp_connection(ip_type)
         connection = struct.pack('H', 2)
         connection += struct.pack('I', udp_port)
-        sock_tcp.send(connection)
+        sock_tcp.sendall(connection)
 
         # recebe mensagem contendo nome e tamanho do arquivo
         info_file = sock_tcp.recv(25)
@@ -115,15 +111,15 @@ def client_thread(sock_tcp, ip_type):
         if info_unpack[0] == 3:
             # envia mensagem confirmando que o envio pode comecar 
             ok = struct.pack('H', 4)
-            sock_tcp.send(ok)
+            sock_tcp.sendall(ok)
             # inicia processo da janela deslizante do receptor
             ret = sliding_window(sock_udp, sock_tcp, info_unpack[1].decode(), info_unpack[2])
             # sinaliza que todos os bytes do arquivo foram recebidos e o cliente pode desconectar
             if ret == 1:
                 fim = struct.pack('H', 5)
-                sock_tcp.send(fim)
+                sock_tcp.sendall(fim)
             
-    print("Finalizando comunicacao com o cliente")
+    print("Finalizando conexao com o cliente")
     # finaliza conexao TCP
     sock_tcp.close()
 
@@ -143,6 +139,8 @@ def server_ipv6(port):
 
 def main():
     port = sys.argv[1]
+    # cria pasta para armazenar os arquivos
+    os.makedirs("output/", exist_ok=True)
 
     # cria nova thread para lidar com protocolo ipv6
     thread_ipv6 = threading.Thread(target=server_ipv6, args=(port,))
