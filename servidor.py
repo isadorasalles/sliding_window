@@ -34,23 +34,23 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
         output = [b'' for _ in range(int(length/MAX_SIZE)+1)]
 
     count = 0
-    sock_udp.settimeout(5)
+    # sock_udp.settimeout(5)
 
     # enquanto nao tiver quantidade de bytes igual ao tamanho do arquivo fica me loop
     while count < length:
         # recebe um pedaco do arquivo via UDP
-        try: 
-            data = sock_udp.recv(1008) # 1008?
-        except socket.timeout:
-            sock_tcp.settimeout(1)
-            try:
-                msg_test = sock_tcp.recv(1024)
-                if not msg_test:
-                    print("Cliente desconectou, arquivo nao foi recebido por completo")
-                    return -1
-            except socket.timeout:
-                sock_tcp.settimeout(None)
-                continue
+        # try: 
+        data = sock_udp.recv(1008) # 1008?
+        # except socket.timeout:
+        #     sock_tcp.settimeout(1)
+        #     try:
+        #         msg_test = sock_tcp.recv(1024)
+        #         if not msg_test:
+        #             print("Cliente desconectou, arquivo nao foi recebido por completo")
+        #             return -1
+        #     except socket.timeout:
+        #         sock_tcp.settimeout(None)
+        #         continue
 
         payload_size = len(data) - 8
         if payload_size == MAX_SIZE or payload_size == length%MAX_SIZE:
