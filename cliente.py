@@ -16,21 +16,21 @@ def thread_receive(Window, sock_tcp):
             break
         Window.lock_end.release()
 
-        while True:
-            Window.lock_send_window.acquire()
-            # print(Window.window.items())
-            if len(Window.window.items()) != 0:
-                oldest_seq_number, (oldest_endtime, retrans_left) = next(iter(Window.window.items()))
-                Window.lock_send_window.release()
-                break
-            Window.lock_send_window.release()
+        Window.lock_send_window.acquire()
+
+        while len(Window.window.items()) == 0:
+            Window.not_empty.wait()
+        oldest_seq_number, (oldest_endtime, retrans_left) = next(iter(Window.window.items()))
+        print(Window.window.items())
+        Window.lock_send_window.release()
+
         timeout = Window._calculate_timeout(oldest_endtime)
-        # print(timeout)
+    
         if timeout == 0:
             if retrans_left <= 0:
                 print("\nTimeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
                 os._exit(1)
-                break
+                
             Window.notify_repeat(oldest_seq_number)
             continue
         
@@ -41,7 +41,6 @@ def thread_receive(Window, sock_tcp):
             if not reply:
                 print("Servidor fechou")
                 os._exit(1)
-                break
 
             ack = struct.unpack('=HI', reply)
             print("ACK recebido para o pacote {}".format(ack[1]))
@@ -53,12 +52,12 @@ def thread_receive(Window, sock_tcp):
             if retrans_left <= 0:
                 print("\nTimeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
                 os._exit(1)
-                break
 
             Window.notify_repeat(oldest_seq_number)
 
 def thread_send(Window):
     while True:
+
         Window.lock_end.acquire()
         if Window.count_receive == len(Window.datagrams):
             print("Saindo da thread send")
@@ -69,12 +68,16 @@ def thread_send(Window):
         Window.verify_repeat()
 
         Window.lock_send_window.acquire()
-        if Window.window_size > 0 and Window.window_size <= 4:
-            # print("Verfica se pode mandar e manda")
-            if Window.last < len(Window.datagrams):
-                Window.send(Window.last, Window.max_retr)
-                Window.window_size -= 1
-                Window.last += 1
+        
+        while Window.window_size == 0:
+            Window.cond_size.wait()
+        # if Window.window_size > 0 and Window.window_size <= 4:
+        if Window.last < len(Window.datagrams):
+            Window.send(Window.last, Window.max_retr)
+            Window.window_size -= 1
+            Window.last += 1
+            Window.not_empty.notify()
+
         Window.lock_send_window.release()
 
 
@@ -92,74 +95,73 @@ class SlidingWindow(object):
         self.not_ack = []
         self.count_receive = 0
 
-        self.lock_size_window = threading.Lock()
         self.lock_not_ack = threading.Lock()
         self.lock_send_window = threading.Lock()
+        self.lock_left_window = threading.Lock()
         self.lock_end = threading.Lock()
+        self.not_empty = threading.Condition(self.lock_send_window)
+        self.cond_size = threading.Condition(self.lock_send_window)
         
         #criacao do socket UDP
         self.sock_udp = create_socket(ip, socket.SOCK_DGRAM)
         self.ip = ip
         self.udp_port = udp_port
     
-    def window_send(self, data):
-        # envia um numero de mensagens seguidas igual ou inferior ao tamanho maximo da janela
-        for i in range(self.window_size):
-            if i < len(self.datagrams):
-                self.send(i, self.max_retr)
-                print("Pacote {} enviado".format(i))
+    # def window_send(self, data):
+    #     # envia um numero de mensagens seguidas igual ou inferior ao tamanho maximo da janela
+    #     for i in range(self.window_size):
+    #         if i < len(self.datagrams):
+    #             self.send(i, self.max_retr)
+    #             print("Pacote {} enviado".format(i))
 
     def send(self, key, retrans_left):
         # envia pedaco do arquivo via UDP
         self.sock_udp.sendto(self.send_msg(self.datagrams[key]), (self.ip, self.udp_port) )
         print("Pacote {} enviado".format(key))
         # armazena o clock de quando a mensagem foi enviada e o numero de retransferencias permitidas
-        # self.lock_send_window.acquire()
         self.window[key] = (time.time() + self.timeout, retrans_left)
-        # self.lock_send_window.release()
 
     def repeat(self, oldest_seq_number):
         self.lock_send_window.acquire()
         retrans_left = self.window[oldest_seq_number][1]
         self.window.pop(oldest_seq_number)
         self.lock_send_window.release()
+
         if retrans_left <= 0:
             print("\nTimeout: Acabou o numero maximo de retransmissoes, pacote {} nao recebeu ACK".format(oldest_seq_number))
             os._exit(1)
+
         print("Retransmitir pacote {}".format(oldest_seq_number))
         self.send(oldest_seq_number, retrans_left-1)
         
     def notify_repeat(self, key):
         self.lock_not_ack.acquire()
+
         if key not in self.not_ack:
             self.not_ack.append(key)
+
         self.lock_not_ack.release()
     
     def verify_repeat(self):
         self.lock_not_ack.acquire()
-        # print("Verificando repeate")
+        
         if len(self.not_ack) > 0:
-            print(self.not_ack)
             self.repeat(self.not_ack.pop(0))
-            print(self.not_ack)
+
         self.lock_not_ack.release()
 
     def ack_received(self, key):
         self.lock_send_window.acquire()
-        # print("log: ack received")
+        
         if key in self.window.keys():
             self.window.pop(key)
+            self.window_size += 1
 
             self.lock_end.acquire()
             self.count_receive += 1
             self.lock_end.release()
-
-            # self.lock_size_window.acquire()
-            self.window_size += 1
-            # self.lock_size_window.release()
-
+            self.cond_size.notify()
         self.lock_send_window.release()
-        # print("release ack recv")
     
     def _calculate_timeout(self, end_time):
         return max(0, min(self.timeout, end_time - time.time()))
@@ -268,6 +270,10 @@ def main():
     fname = sys.argv[3]
 
     if verify_fname(fname) == True:
+        #O final da string termina quando o servidor lê o terceiro caractere depois do (.)
+        fname_ = fname.split(".")
+        fname = fname_[0]+'.'+fname_[1][:3]
+
         # criando socket e iniciando conexao
         s = create_socket(ip, socket.SOCK_STREAM)
         s.connect((ip, int(port)))

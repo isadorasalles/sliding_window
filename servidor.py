@@ -56,8 +56,8 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
         if payload_size == MAX_SIZE or payload_size == length%MAX_SIZE:
             
             file_data = struct.unpack('=HIH'+str(payload_size)+'s', data)
-    
-            if file_data[0] == 6:
+
+            if file_data[0] == 6 and payload_size == file_data[2]:
                 if not output[file_data[1]]:
                     count += payload_size
                 # armazena o pacote recebido na lista na posicao referente 
@@ -71,6 +71,10 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
                 except:
                     print("Cliente desconectou, arquivo nao foi recebido por completo")
                     return -1
+            else:
+                print("pacote corrompido")
+        else:
+            print("pacote corrompido1")
     
     file_ = os.path.join("output/", fname)
     with open(file_, "wb") as out:
