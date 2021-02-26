@@ -13,7 +13,7 @@ def udp_connection(ip_type):
     else:
         sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    # bind em qualquer porta
+    # bind em qualquer porta 
     sock_udp.bind(('localhost', 0))
 
     # retorna o socket criado e a porta ao qual foi conectado
@@ -34,24 +34,16 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
         output = [b'' for _ in range(int(length/MAX_SIZE)+1)]
 
     count = 0
-    # sock_udp.settimeout(5)
+
+    # envia mensagem confirmando que o envio pode comecar 
+    ok = struct.pack('H', 4)
+    sock_tcp.sendall(ok)
 
     # enquanto nao tiver quantidade de bytes igual ao tamanho do arquivo fica me loop
     while count < length:
-        # recebe um pedaco do arquivo via UDP
-        # try: 
+        
         data = sock_udp.recv(1008) # 1008?
-        # except socket.timeout:
-        #     sock_tcp.settimeout(1)
-        #     try:
-        #         msg_test = sock_tcp.recv(1024)
-        #         if not msg_test:
-        #             print("Cliente desconectou, arquivo nao foi recebido por completo")
-        #             return -1
-        #     except socket.timeout:
-        #         sock_tcp.settimeout(None)
-        #         continue
-
+        
         payload_size = len(data) - 8
         if payload_size == MAX_SIZE or payload_size == length%MAX_SIZE:
             
@@ -71,10 +63,6 @@ def sliding_window(sock_udp, sock_tcp, fname, length):
                 except:
                     print("Cliente desconectou, arquivo nao foi recebido por completo")
                     return -1
-            else:
-                print("pacote corrompido")
-        else:
-            print("pacote corrompido1")
     
     file_ = os.path.join("output/", fname)
     with open(file_, "wb") as out:
@@ -113,9 +101,6 @@ def client_thread(sock_tcp, ip_type):
         info_unpack = struct.unpack('=H'+str(length)+'sQ', info_file)
 
         if info_unpack[0] == 3:
-            # envia mensagem confirmando que o envio pode comecar 
-            ok = struct.pack('H', 4)
-            sock_tcp.sendall(ok)
             # inicia processo da janela deslizante do receptor
             ret = sliding_window(sock_udp, sock_tcp, info_unpack[1].decode(), info_unpack[2])
             # sinaliza que todos os bytes do arquivo foram recebidos e o cliente pode desconectar
@@ -129,13 +114,14 @@ def client_thread(sock_tcp, ip_type):
 
 def server_ipv6(port):
     # cria socket ipv6
-    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    s.bind(('localhost', int(port)))
-    s.listen()
+    s_ipv6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    s_ipv6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s_ipv6.bind(('localhost', int(port)))
+    s_ipv6.listen()
 
     while(1):
-        csock, _ = s.accept()
-
+        csock, _ = s_ipv6.accept()
+        
         # cria thread do cliente
         thread = threading.Thread(target=client_thread, args=(csock, 6))
         thread.daemon = True
@@ -153,6 +139,7 @@ def main():
 
     # cria socket ipv4
     s_ipv4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s_ipv4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s_ipv4.bind(('localhost', int(port)))
     s_ipv4.listen()
 
